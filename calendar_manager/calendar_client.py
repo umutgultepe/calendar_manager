@@ -78,13 +78,14 @@ class GoogleCalendarClient:
         except Exception:
             return False
 
-    def search_events(self, query: str, start_time: datetime, end_time: datetime) -> List[Event]:
+    def search_events(self, query: str, start_time: datetime, end_time: datetime, calendar_id: str = 'primary') -> List[Event]:
         """Search for events in the calendar.
         
         Args:
             query: Search query string
             start_time: Start of the search range
             end_time: End of the search range
+            calendar_id: ID of the calendar to search (default: 'primary')
             
         Returns:
             List of matching Event objects
@@ -94,7 +95,7 @@ class GoogleCalendarClient:
 
         try:
             events_result = self.service.events().list(
-                calendarId='primary',
+                calendarId=calendar_id,
                 timeMin=self._sanitize_date_for_api(start_time),
                 timeMax=self._sanitize_date_for_api(end_time),
                 singleEvents=True,

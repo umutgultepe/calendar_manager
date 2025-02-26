@@ -46,3 +46,6 @@ token.pickle
 
 # Configuration
 calendar_manager/config/*
+
+# Dataset
+calendar_manager/data/next_meetings.json

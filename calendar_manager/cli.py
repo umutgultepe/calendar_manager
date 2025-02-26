@@ -51,10 +51,13 @@ def get_last_by_username(username: str, days: int, org_file: str, credentials: s
         calendar_client = GoogleCalendarClient(credentials)
 
         # Get the organizer information
-        organizer = Attendee(
-            name="Umut Gultepe",  # This should be your name
-            email="ugultepe@abnormalsecurity.com"  # This should be your email
-        )
+        # Load organizer info from meeting_frequency.yaml
+        with open('calendar_manager/config/meeting_frequency.yaml', 'r') as f:
+            config = yaml.safe_load(f)
+            organizer = Attendee(
+                name=config['organizer']['name'],
+                email=config['organizer']['email']
+            )
 
         # Initialize the 1:1 manager
         one_on_one_manager = OneOnOneManager(
@@ -115,6 +118,7 @@ def person(email, org_file):
         click.echo(f"Location:  {person.location} ({person.metro})")
         click.echo(f"Started:   {person.start_date} ({person.tenure})")
         click.echo(f"Manager:   {person.manager}")
+        click.echo(f"Role:      {person.role or 'Not assigned'}")
         click.echo("─" * 50)
         
     except FileNotFoundError:

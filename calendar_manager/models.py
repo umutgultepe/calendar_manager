@@ -32,6 +32,7 @@ class Person:
     metro: str
     location: str
     manager: str
+    role: Optional[str] = None
 
     @property
     def first_name(self) -> str:

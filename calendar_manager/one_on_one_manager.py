@@ -26,6 +26,7 @@ class OneOnOneManager:
         self.person_manager = person_manager
         self.calendar_client = calendar_client
         self._load_meeting_frequency()
+        self.domain = self.config.get('domain', 'abnormalsecurity.com')  # Default fallback
 
     def _load_meeting_frequency(self) -> None:
         """Load meeting frequency configuration from YAML file."""
@@ -66,14 +67,14 @@ class OneOnOneManager:
         """Get the recommended date for the next 1:1 meeting with a person.
         
         Args:
-            username: Username (without @abnormalsecurity.com)
+            username: Username (without @domain)
             days_back: Number of days to look back for last meeting (default: 30)
             
         Returns:
             Recommended date for next meeting, or None if person not found
         """
         # Get the person's information
-        email = f"{username}@abnormalsecurity.com"
+        email = f"{username}@{self.domain}"
         person = self.person_manager.by_email(email)
         
         if not person:
@@ -118,13 +119,13 @@ class OneOnOneManager:
         """Get the last 1:1 meeting with a person by their username.
         
         Args:
-            username: Username (without @abnormalsecurity.com)
+            username: Username (without @domain)
             days_back: Number of days to look back (default: 30)
             
         Returns:
             Event object if found, None otherwise
         """
-        email = f"{username}@abnormalsecurity.com"
+        email = f"{username}@{self.domain}"
         person = self.person_manager.by_email(email)
         
         if not person:
@@ -218,8 +219,8 @@ class OneOnOneManager:
 
         return next_meetings
 
-    def get_free_slots(self) -> List[datetime]:
-        """Get available time slots for meetings in the next business week.
+    def get_free_slots(self, start_date: Optional[datetime] = None, end_date: Optional[datetime] = None) -> List[datetime]:
+        """Get available time slots for meetings in the specified date range.
         
         This method:
         1. Finds marked time blocks in the slot calendar
@@ -229,6 +230,10 @@ class OneOnOneManager:
         A time slot is considered conflicting only if there is a meeting with multiple attendees.
         Single-attendee events (like focus time or personal blocks) are not counted as conflicts.
         
+        Args:
+            start_date: Start date for the search range (optional, defaults to next Monday)
+            end_date: End date for the search range (optional, defaults to next Friday)
+            
         Returns:
             List of datetime objects representing available meeting start times
         """
@@ -236,21 +241,34 @@ class OneOnOneManager:
         slot_calendar = self.config['organizer']['slot_calendar_name']
         slot_title = self.config['organizer']['slot_title']
         
-        # Calculate next business week
-        now = datetime.now() + timedelta(days=7)
-        start_of_week = now + timedelta(days=(7 - now.weekday()))  # Next Monday
-        end_of_week = start_of_week + timedelta(days=5)  # Friday
+        # Calculate date range
+        now = datetime.now()
+        if start_date is None:
+            # Default to next Monday
+            start_date = now + timedelta(days=(7 - now.weekday()))
+        if end_date is None:
+            # Default to end of next business week (Friday)
+            end_date = start_date + timedelta(days=4)
+            
+        # Ensure dates are timezone-aware
+        if start_date.tzinfo is None:
+            start_date = start_date.replace(tzinfo=now.astimezone().tzinfo)
+        if end_date.tzinfo is None:
+            end_date = end_date.replace(tzinfo=now.astimezone().tzinfo)
+            
+        # Set end_date to end of day
+        end_date = end_date.replace(hour=23, minute=59, second=59)
         
         print(f"\nSearching for '{slot_title}' blocks between:")
-        print(f"  Start: {start_of_week.strftime('%A, %B %d, %Y')}")
-        print(f"  End:   {end_of_week.strftime('%A, %B %d, %Y')}")
+        print(f"  Start: {start_date.strftime('%A, %B %d, %Y')}")
+        print(f"  End:   {end_date.strftime('%A, %B %d, %Y')}")
         print(f"  Calendar: {slot_calendar}")
         
         # Get marked time blocks
         time_blocks = self.calendar_client.search_events(
             query=slot_title,
-            start_time=start_of_week,
-            end_time=end_of_week,
+            start_time=start_date,
+            end_time=end_date,
             calendar_id=slot_calendar
         )
         

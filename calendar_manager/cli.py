@@ -9,6 +9,16 @@ from .person_manager import PersonManager
 from .one_on_one_manager import OneOnOneManager
 from .models import Attendee
 import zoneinfo
+from typing import Optional
+
+def _load_config():
+    """Load configuration from meeting_frequency.yaml."""
+    config_path = 'calendar_manager/config/meeting_frequency.yaml'
+    if not os.path.exists(config_path):
+        raise FileNotFoundError(f"Meeting frequency config not found: {config_path}")
+        
+    with open(config_path, 'r') as f:
+        return yaml.safe_load(f)
 
 @click.group()
 def main():
@@ -102,11 +112,17 @@ def get_last_by_username(username: str, days: int, org_file: str, credentials: s
 def person(email, org_file):
     """Display information about a person by their email."""
     try:
+        # Load config to get domain
+        config = _load_config()
+        if 'domain' not in config:
+            raise ValueError("Domain not found in configuration file")
+        domain = config['domain']
+        
         manager = PersonManager(org_file)
-        person = manager.by_email(email + '@abnormalsecurity.com')
+        person = manager.by_email(email + f'@{domain}')
         
         if not person:
-            click.echo(f"❌ No person found with email: {email}@abnormalsecurity.com")
+            click.echo(f"❌ No person found with email: {email}@{domain}")
             return
         
         # Get timezone information
@@ -275,14 +291,21 @@ def refresh_dataset(days: int, org_file: str, credentials: str):
         click.echo(f"❌ Error: {str(e)}")
 
 @main.command()
+@click.option('--start-date', '-s', type=str,
+              help='Start date in YYYY-MM-DD format (defaults to next Monday)')
+@click.option('--end-date', '-e', type=str,
+              help='End date in YYYY-MM-DD format (defaults to next Friday)')
 @click.option('--org-file', '-o',
               default='calendar_manager/config/organization.csv',
               help='Path to the organization CSV file')
 @click.option('--credentials', '-c',
               default='credentials.json',
               help='Path to the credentials.json file')
-def free_slots(org_file: str, credentials: str):
-    """Show available time slots for meetings in the next business week."""
+def free_slots(start_date: Optional[str], end_date: Optional[str], org_file: str, credentials: str):
+    """Show available time slots for meetings in the specified date range.
+    
+    If no dates are provided, shows slots for the next business week.
+    """
     try:
         # Initialize dependencies
         person_manager = PersonManager(org_file)
@@ -303,11 +326,28 @@ def free_slots(org_file: str, credentials: str):
             calendar_client=calendar_client
         )
 
+        # Parse dates if provided
+        start = None
+        end = None
+        if start_date:
+            try:
+                start = datetime.strptime(start_date, '%Y-%m-%d')
+            except ValueError:
+                click.echo("❌ Invalid start date format. Please use YYYY-MM-DD")
+                return
+                
+        if end_date:
+            try:
+                end = datetime.strptime(end_date, '%Y-%m-%d')
+            except ValueError:
+                click.echo("❌ Invalid end date format. Please use YYYY-MM-DD")
+                return
+
         # Get free slots
-        slots = one_on_one_manager.get_free_slots()
+        slots = one_on_one_manager.get_free_slots(start_date=start, end_date=end)
         
         if not slots:
-            click.echo("❌ No available time slots found in the next business week.")
+            click.echo("❌ No available time slots found in the specified date range.")
             return
             
         # Display available slots
@@ -347,22 +387,24 @@ def is_free(username: str, date: str, time: str, org_file: str, credentials: str
     """Check if a person is free for a 30-minute meeting.
     
     Arguments:
-        username: Username (without @abnormalsecurity.com)
+        username: Username (without domain)
         date: Date in YYYY-MM-DD format
         time: Time in HH:MM format (24-hour) in YOUR timezone
     """
     try:
+        # Load config
+        config = _load_config()
+        domain = config.get('domain', 'abnormalsecurity.com')  # Default fallback
+
         # Initialize dependencies
         person_manager = PersonManager(org_file)
         calendar_client = GoogleCalendarClient(credentials)
 
         # Get the organizer information
-        with open('calendar_manager/config/meeting_frequency.yaml', 'r') as f:
-            config = yaml.safe_load(f)
-            organizer = Attendee(
-                name=config['organizer']['name'],
-                email=config['organizer']['email']
-            )
+        organizer = Attendee(
+            name=config['organizer']['name'],
+            email=config['organizer']['email']
+        )
 
         # Initialize the 1:1 manager
         one_on_one_manager = OneOnOneManager(
@@ -372,7 +414,7 @@ def is_free(username: str, date: str, time: str, org_file: str, credentials: str
         )
 
         # Get the person's information
-        email = f"{username}@abnormalsecurity.com"
+        email = f"{username}@{domain}"
         person = person_manager.by_email(email)
         
         if not person:

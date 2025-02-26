@@ -4,8 +4,9 @@ import os
 import json
 from pathlib import Path
 import yaml
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, time
 from typing import List, Optional, Dict
+import zoneinfo
 
 from .calendar_client import GoogleCalendarClient
 from .person_manager import PersonManager
@@ -303,4 +304,56 @@ class OneOnOneManager:
             print(f"  • {total_single_attendee} had only single-attendee events")
             print(f"  • {total_checked - total_conflicts - total_single_attendee} were completely free")
             
-        return sorted(free_slots) 
+        return sorted(free_slots)
+
+    def is_person_free(self, meeting_time: datetime, person_email: str) -> bool:
+        """Check if a person is free for a 30-minute meeting at the specified time.
+        
+        A person is considered free if:
+        1. The meeting is during their business hours (9 AM to 5 PM local time)
+        2. They don't have any conflicting meetings
+        
+        Args:
+            meeting_time: Timezone-aware datetime for the proposed meeting
+            person_email: Email address of the person to check
+            
+        Returns:
+            bool: True if the person is free, False otherwise
+            
+        Raises:
+            ValueError: If person not found or timezone mapping not available
+        """
+        # Get the person
+        person = self.person_manager.by_email(person_email)
+        if not person:
+            raise ValueError(f"Person not found with email: {person_email}")
+            
+        # Get their timezone
+        tz = person.get_timezone()
+        
+        # Convert meeting time to person's timezone
+        local_time = meeting_time.astimezone(tz)
+        
+        # Check if it's during business hours (9 AM to 5 PM)
+        business_start = time(9, 0)  # 9 AM
+        business_end = time(17, 0)   # 5 PM
+        
+        meeting_end_time = (local_time + timedelta(minutes=30)).time()
+        if not (business_start <= local_time.time() and meeting_end_time <= business_end):
+            return False
+        # Check for conflicts in the 30-minute slot
+        meeting_end = meeting_time + timedelta(minutes=30)
+        events = self.calendar_client.search_events(
+            query="",  # Empty query to get all events
+            start_time=meeting_time,
+            end_time=meeting_end,
+            calendar_id=person_email  # Search in person's calendar
+        )
+        
+        # Filter out single-attendee events
+        conflicts = [
+            event for event in events
+            if len(event.attendees) > 1  # More than one attendee
+        ]
+        
+        return len(conflicts) == 0 

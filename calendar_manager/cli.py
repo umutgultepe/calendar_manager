@@ -8,6 +8,7 @@ from .calendar_client import GoogleCalendarClient
 from .person_manager import PersonManager
 from .one_on_one_manager import OneOnOneManager
 from .models import Attendee
+import zoneinfo
 
 @click.group()
 def main():
@@ -108,6 +109,19 @@ def person(email, org_file):
             click.echo(f"❌ No person found with email: {email}@abnormalsecurity.com")
             return
         
+        # Get timezone information
+        try:
+            tz = person.get_timezone()
+            current_time = datetime.now(tz)
+            tz_name = str(tz)
+            tz_offset = current_time.strftime('%z')  # Format: +HHMM or -HHMM
+            current_time_str = current_time.strftime('%I:%M %p')
+        except ValueError as e:
+            tz_info = f"Error: {str(e)}"
+            tz_name = "Unknown"
+            tz_offset = "N/A"
+            current_time_str = "N/A"
+        
         # Display person information in a formatted way
         click.echo("\n📋 Person Information:")
         click.echo("─" * 50)
@@ -119,6 +133,11 @@ def person(email, org_file):
         click.echo(f"Started:   {person.start_date} ({person.tenure})")
         click.echo(f"Manager:   {person.manager}")
         click.echo(f"Role:      {person.role or 'Not assigned'}")
+        click.echo("─" * 50)
+        click.echo("🌐 Timezone Information:")
+        click.echo(f"Timezone:  {tz_name}")
+        click.echo(f"Offset:    UTC{tz_offset}")
+        click.echo(f"Local:     {current_time_str}")
         click.echo("─" * 50)
         
     except FileNotFoundError:
@@ -308,6 +327,99 @@ def free_slots(org_file: str, credentials: str):
         click.echo("\n")
         click.echo("─" * 50)
         click.echo(f"Total available slots: {len(slots)}")
+
+    except FileNotFoundError as e:
+        click.echo(f"❌ File not found: {str(e)}")
+    except Exception as e:
+        click.echo(f"❌ Error: {str(e)}")
+
+@main.command()
+@click.argument('username')
+@click.argument('date')
+@click.argument('time')
+@click.option('--org-file', '-o',
+              default='calendar_manager/config/organization.csv',
+              help='Path to the organization CSV file')
+@click.option('--credentials', '-c',
+              default='credentials.json',
+              help='Path to the credentials.json file')
+def is_free(username: str, date: str, time: str, org_file: str, credentials: str):
+    """Check if a person is free for a 30-minute meeting.
+    
+    Arguments:
+        username: Username (without @abnormalsecurity.com)
+        date: Date in YYYY-MM-DD format
+        time: Time in HH:MM format (24-hour) in YOUR timezone
+    """
+    try:
+        # Initialize dependencies
+        person_manager = PersonManager(org_file)
+        calendar_client = GoogleCalendarClient(credentials)
+
+        # Get the organizer information
+        with open('calendar_manager/config/meeting_frequency.yaml', 'r') as f:
+            config = yaml.safe_load(f)
+            organizer = Attendee(
+                name=config['organizer']['name'],
+                email=config['organizer']['email']
+            )
+
+        # Initialize the 1:1 manager
+        one_on_one_manager = OneOnOneManager(
+            organizer=organizer,
+            person_manager=person_manager,
+            calendar_client=calendar_client
+        )
+
+        # Get the person's information
+        email = f"{username}@abnormalsecurity.com"
+        person = person_manager.by_email(email)
+        
+        if not person:
+            click.echo(f"❌ No person found with email: {email}")
+            return
+
+        try:
+            # Parse date and time and make it timezone-aware in user's timezone
+            user_tz = zoneinfo.ZoneInfo('America/Los_Angeles')  # Default to PT for the organizer
+            meeting_datetime = datetime.strptime(f"{date} {time}", "%Y-%m-%d %H:%M")
+            meeting_datetime = meeting_datetime.replace(tzinfo=user_tz)
+            
+            # Get the person's timezone and convert the time
+            person_tz = person.get_timezone()
+            meeting_datetime_person_tz = meeting_datetime.astimezone(person_tz)
+            
+            # Check availability
+            is_available = one_on_one_manager.is_person_free(meeting_datetime_person_tz, email)
+            
+            # Format times for display
+            user_time = meeting_datetime.strftime("%I:%M %p")
+            user_date = meeting_datetime.strftime("%A, %B %d, %Y")
+            person_time = meeting_datetime_person_tz.strftime("%I:%M %p")
+            person_date = meeting_datetime_person_tz.strftime("%A, %B %d, %Y")
+            
+            # Display results
+            click.echo("\n🕒 Availability Check:")
+            click.echo("─" * 50)
+            click.echo(f"Person:     {person.name}")
+            click.echo(f"Your time:  {user_time} {user_tz}")
+            click.echo(f"Your date:  {user_date}")
+            if str(user_tz) != str(person_tz):
+                click.echo(f"Their time: {person_time} {person_tz}")
+                click.echo(f"Their date: {person_date}")
+            click.echo("─" * 50)
+            
+            if is_available:
+                click.echo("✅ Available for a 30-minute meeting")
+            else:
+                click.echo("❌ Not available (outside business hours or has conflicts)")
+            click.echo("─" * 50)
+
+        except ValueError as e:
+            click.echo(f"❌ Error: {str(e)}")
+            click.echo("\nPlease use the following format:")
+            click.echo("  Date: YYYY-MM-DD (e.g., 2024-02-26)")
+            click.echo("  Time: HH:MM in 24-hour format (e.g., 14:30)")
 
     except FileNotFoundError as e:
         click.echo(f"❌ File not found: {str(e)}")

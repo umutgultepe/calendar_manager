@@ -426,5 +426,102 @@ def is_free(username: str, date: str, time: str, org_file: str, credentials: str
     except Exception as e:
         click.echo(f"❌ Error: {str(e)}")
 
-if __name__ == '__main__':
-    main() 
+@main.command()
+@click.option('--org-file', '-o',
+              default='calendar_manager/config/organization.csv',
+              help='Path to the organization CSV file')
+@click.option('--credentials', '-c',
+              default='credentials.json',
+              help='Path to the credentials.json file')
+def recommend(org_file: str, credentials: str):
+    """Recommend and confirm 1:1 meetings based on availability."""
+    try:
+        # Initialize dependencies
+        person_manager = PersonManager(org_file)
+        calendar_client = GoogleCalendarClient(credentials)
+
+        # Get the organizer information
+        with open('calendar_manager/config/meeting_frequency.yaml', 'r') as f:
+            config = yaml.safe_load(f)
+            organizer = Attendee(
+                name=config['organizer']['name'],
+                email=config['organizer']['email']
+            )
+
+        # Initialize the 1:1 manager
+        one_on_one_manager = OneOnOneManager(
+            organizer=organizer,
+            person_manager=person_manager,
+            calendar_client=calendar_client
+        )
+
+        # Get free slots
+        click.echo("\n🔍 Finding available time slots...")
+        slots = one_on_one_manager.get_free_slots()
+        
+        if not slots:
+            click.echo("❌ No available time slots found in the next business week.")
+            return
+
+        # Load next meetings data
+        try:
+            next_meetings = one_on_one_manager.load_next_meetings()
+        except FileNotFoundError as e:
+            click.echo(f"❌ {str(e)}")
+            return
+
+        if not next_meetings:
+            click.echo("❌ No pending 1:1 meetings found.")
+            return
+
+        click.echo("\n📅 Checking availability and suggesting meetings...")
+        click.echo("─" * 50)
+        click.echo("Commands: 'y' to confirm, 'n' for next person, 's' to stop")
+        click.echo("─" * 50)
+
+        # For each slot
+        for slot in slots:
+            slot_time = slot.strftime("%A, %B %d at %I:%M %p")
+            click.echo(f"\nChecking slot: {slot_time}")
+            
+            # For each person (already sorted by next meeting date)
+            for email, next_date in next_meetings:
+                person = person_manager.by_email(email)
+                if not person:
+                    continue
+
+                # Check if person is free
+                try:
+                    if one_on_one_manager.is_person_free(slot, email):
+                        # Format the suggestion
+                        person_tz = person.get_timezone()
+                        local_time = slot.astimezone(person_tz)
+                        
+                        click.echo("\n📋 Suggested Meeting:")
+                        click.echo("─" * 30)
+                        click.echo(f"Person:     {person.name}")
+                        click.echo(f"Your time:  {slot.strftime('%I:%M %p')} PT")
+                        if str(person_tz) != "America/Los_Angeles":
+                            click.echo(f"Their time: {local_time.strftime('%I:%M %p')} {person_tz}")
+                        click.echo(f"Due date:   {next_date.strftime('%Y-%m-%d')}")
+                        click.echo("─" * 30)
+                        
+                        # Get user confirmation
+                        if click.confirm("Would you like to schedule this meeting?", default=True):
+                            click.echo("✅ Confirmed! (Scheduling will be implemented later)")
+                            # Remove this person from the list
+                            next_meetings.remove((email, next_date))
+                            # Move to next slot
+                            break
+                        elif click.confirm("Stop suggesting meetings?", default=False):
+                            click.echo("\n👋 Stopping meeting suggestions.")
+                            return
+                        # If user says no, continue to next person
+                        click.echo("Looking for next available person...")
+                except ValueError as e:
+                    click.echo(f"⚠️  Skipping {person.name}: {str(e)}")
+                    continue
+
+
+    except FileNotFoundError as e:
+        click.echo(f"❌ File not found: {str(e)}")

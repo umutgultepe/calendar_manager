@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 import yaml
 from datetime import datetime, timedelta, time
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Tuple
 import zoneinfo
 
 from .calendar_client import GoogleCalendarClient
@@ -91,7 +91,7 @@ class OneOnOneManager:
             base_date = last_meeting.start_time
         else:
             # No previous meeting found, use current date
-            base_date = datetime.utcnow()
+            base_date = datetime.utcnow() - timedelta(days=days_back)
         
         return base_date + timedelta(weeks=frequency_weeks)
 
@@ -206,7 +206,8 @@ class OneOnOneManager:
                 next_date = self.get_next_recommended_date(username, days_back=days_back)
                 
                 if next_date:
-                    next_meetings[email] = next_date.isoformat()
+                    # Store only the date part, not time
+                    next_meetings[email] = next_date.date().isoformat()
             except ValueError:
                 # Skip people with no matching frequency
                 continue
@@ -341,6 +342,15 @@ class OneOnOneManager:
         meeting_end_time = (local_time + timedelta(minutes=30)).time()
         if not (business_start <= local_time.time() and meeting_end_time <= business_end):
             return False
+
+        # Check if meeting overlaps with lunch hour (12-1 PM)
+        lunch_start = time(12, 0)  # 12 PM
+        lunch_end = time(13, 0)    # 1 PM
+        
+        if (lunch_start <= local_time.time() <= lunch_end or
+            lunch_start <= meeting_end_time <= lunch_end):
+            return False
+
         # Check for conflicts in the 30-minute slot
         meeting_end = meeting_time + timedelta(minutes=30)
         events = self.calendar_client.search_events(
@@ -349,11 +359,33 @@ class OneOnOneManager:
             end_time=meeting_end,
             calendar_id=person_email  # Search in person's calendar
         )
-        
-        # Filter out single-attendee events
         conflicts = [
             event for event in events
-            if len(event.attendees) > 1  # More than one attendee
+            if len(event.attendees) > 1 or "Focus" in event.title
+        ]
+        return len(conflicts) == 0 
+
+    def load_next_meetings(self) -> List[Tuple[str, datetime]]:
+        """Load and parse the next meetings data file.
+        
+        Returns:
+            List of tuples (email, next_meeting_date) sorted by date.
+            The datetime objects will be set to midnight in UTC.
+        """
+        data_path = Path('calendar_manager/data/next_meetings.json')
+        if not data_path.exists():
+            raise FileNotFoundError(
+                "Next meetings dataset not found. Please run 'refresh-dataset' first."
+            )
+            
+        with open(data_path, 'r') as f:
+            data = json.load(f)
+            
+        # Convert to list of tuples and parse dates
+        meetings = [
+            (email, datetime.fromisoformat(date_str))
+            for email, date_str in data.items()
         ]
         
-        return len(conflicts) == 0 
+        # Sort by date
+        return sorted(meetings, key=lambda x: x[1]) 

@@ -231,7 +231,7 @@ def next_one_on_one(username: str, days: int, org_file: str, credentials: str):
         click.echo(f"❌ Error: {str(e)}")
 
 @main.command()
-@click.option('--days', '-d', default=30, help='Number of days to look back')
+@click.option('--days', '-d', default=60, help='Number of days to look back')
 @click.option('--org-file', '-o',
               default='calendar_manager/config/organization.csv',
               help='Path to the organization CSV file')
@@ -473,13 +473,15 @@ def is_free(username: str, date: str, time: str, org_file: str, credentials: str
               help='Start date in YYYY-MM-DD format (defaults to next Monday)')
 @click.option('--end-date', '-e', type=str,
               help='End date in YYYY-MM-DD format (defaults to next Friday)')
+@click.option('--no-refresh', is_flag=True,
+              help='Skip refreshing the dataset before recommending meetings')
 @click.option('--org-file', '-o',
               default='calendar_manager/config/organization.csv',
               help='Path to the organization CSV file')
 @click.option('--credentials', '-c',
               default='credentials.json',
               help='Path to the credentials.json file')
-def recommend(start_date: Optional[str], end_date: Optional[str], org_file: str, credentials: str):
+def recommend(start_date: Optional[str], end_date: Optional[str], no_refresh: bool, org_file: str, credentials: str):
     """Recommend and confirm 1:1 meetings based on availability."""
     try:
         # Initialize dependencies
@@ -500,6 +502,17 @@ def recommend(start_date: Optional[str], end_date: Optional[str], org_file: str,
             person_manager=person_manager,
             calendar_client=calendar_client
         )
+
+        # Refresh dataset by default unless --no-refresh is specified
+        if not no_refresh:
+            click.echo("\n🔄 Refreshing dataset of next meetings...")
+            try:
+                one_on_one_manager.refresh_next_meetings(days_back=60)
+                click.echo("✅ Dataset refreshed successfully")
+            except Exception as e:
+                click.echo(f"⚠️  Failed to refresh dataset: {str(e)}")
+                if not click.confirm("Continue with existing dataset?", default=True):
+                    return
 
         # Parse dates if provided
         start = None

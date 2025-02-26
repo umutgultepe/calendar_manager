@@ -2,13 +2,16 @@
 
 import os
 import pickle
-from typing import Optional
+from datetime import datetime, timedelta, timezone
+from typing import Optional, List
 
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
+
+from .models import Event, Attendee
 
 class GoogleCalendarClient:
     """Client for interacting with Google Calendar API."""
@@ -66,6 +69,105 @@ class GoogleCalendarClient:
             except Exception:
                 return False
 
+        try:
             # Try to get a single calendar entry to validate access
-        self.service.calendarList().list(maxResults=1).execute()
-        return True
+            self.service.calendarList().list(maxResults=1).execute()
+            return True
+        except HttpError:
+            return False
+        except Exception:
+            return False
+
+    def search_events(self, query: str, start_time: datetime, end_time: datetime) -> List[Event]:
+        """Search for events in the calendar.
+        
+        Args:
+            query: Search query string
+            start_time: Start of the search range
+            end_time: End of the search range
+            
+        Returns:
+            List of matching Event objects
+        """
+        if not self.service:
+            self.authenticate()
+
+        try:
+            events_result = self.service.events().list(
+                calendarId='primary',
+                timeMin=self._sanitize_date_for_api(start_time),
+                timeMax=self._sanitize_date_for_api(end_time),
+                singleEvents=True,
+                orderBy='startTime',
+                q=query
+            ).execute()
+
+            events = []
+            for item in events_result.get('items', []):
+                # Extract attendees
+                attendees = []
+                for attendee in item.get('attendees', []):
+                    attendees.append(Attendee(
+                        name=attendee.get('displayName', ''),
+                        email=attendee['email']
+                    ))
+
+                # Extract start and end times
+                start = item['start'].get('dateTime', item['start'].get('date'))
+                end = item['end'].get('dateTime', item['end'].get('date'))
+                
+                # Convert string times to datetime objects
+                start_time = datetime.fromisoformat(start.replace('Z', '+00:00'))
+                end_time = datetime.fromisoformat(end.replace('Z', '+00:00'))
+
+                # Create organizer
+                organizer = None
+                if 'organizer' in item:
+                    organizer = Attendee(
+                        name=item['organizer'].get('displayName', ''),
+                        email=item['organizer']['email']
+                    )
+
+                event = Event(
+                    id=item['id'],
+                    title=item['summary'],
+                    start_time=start_time,
+                    end_time=end_time,
+                    attendees=attendees,
+                    organizer=organizer
+                )
+                events.append(event)
+
+            return events
+
+        except HttpError as error:
+            print(f'An error occurred: {error}')
+            return []
+
+    def _sanitize_date_for_api(self, dt: str | datetime) -> str:
+        """
+        Sanitize datetime for Google Calendar API.
+        If input is string, assumes it's already in ISO format.
+        If datetime is timezone-aware, converts to UTC first.
+        Ensures output is in ISO format with 'Z' suffix.
+        
+        Args:
+            dt: Datetime object or string to sanitize
+            
+        Returns:
+            ISO format string in UTC with 'Z' suffix
+        """
+        if isinstance(dt, str):
+            return dt if dt.endswith('Z') else dt + 'Z'
+
+        # Convert to UTC first if timezone-aware
+        if dt.tzinfo is not None:
+            dt = dt.astimezone(timezone.utc)
+        
+        # Format with microseconds only if they exist
+        if dt.microsecond:
+            formatted = dt.strftime('%Y-%m-%dT%H:%M:%S.%f').rstrip('0')
+        else:
+            formatted = dt.strftime('%Y-%m-%dT%H:%M:%S')
+            
+        return formatted + 'Z'

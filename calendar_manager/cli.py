@@ -469,13 +469,17 @@ def is_free(username: str, date: str, time: str, org_file: str, credentials: str
         click.echo(f"❌ Error: {str(e)}")
 
 @main.command()
+@click.option('--start-date', '-s', type=str,
+              help='Start date in YYYY-MM-DD format (defaults to next Monday)')
+@click.option('--end-date', '-e', type=str,
+              help='End date in YYYY-MM-DD format (defaults to next Friday)')
 @click.option('--org-file', '-o',
               default='calendar_manager/config/organization.csv',
               help='Path to the organization CSV file')
 @click.option('--credentials', '-c',
               default='credentials.json',
               help='Path to the credentials.json file')
-def recommend(org_file: str, credentials: str):
+def recommend(start_date: Optional[str], end_date: Optional[str], org_file: str, credentials: str):
     """Recommend and confirm 1:1 meetings based on availability."""
     try:
         # Initialize dependencies
@@ -497,12 +501,29 @@ def recommend(org_file: str, credentials: str):
             calendar_client=calendar_client
         )
 
+        # Parse dates if provided
+        start = None
+        end = None
+        if start_date:
+            try:
+                start = datetime.strptime(start_date, '%Y-%m-%d')
+            except ValueError:
+                click.echo("❌ Invalid start date format. Please use YYYY-MM-DD")
+                return
+                
+        if end_date:
+            try:
+                end = datetime.strptime(end_date, '%Y-%m-%d')
+            except ValueError:
+                click.echo("❌ Invalid end date format. Please use YYYY-MM-DD")
+                return
+
         # Get free slots
         click.echo("\n🔍 Finding available time slots...")
-        slots = one_on_one_manager.get_free_slots()
+        slots = one_on_one_manager.get_free_slots(start_date=start, end_date=end)
         
         if not slots:
-            click.echo("❌ No available time slots found in the next business week.")
+            click.echo("❌ No available time slots found in the specified date range.")
             return
 
         # Load next meetings data
@@ -564,6 +585,16 @@ def recommend(org_file: str, credentials: str):
                     click.echo(f"⚠️  Skipping {person.name}: {str(e)}")
                     continue
 
+        # Show remaining people who still need meetings
+        if next_meetings:
+            click.echo("\n⚠️  People still needing meetings:")
+            click.echo("─" * 30)
+            for email, next_date in next_meetings:
+                person = person_manager.by_email(email)
+                if person:
+                    click.echo(f"• {person.name} (due: {next_date.strftime('%Y-%m-%d')})")
 
     except FileNotFoundError as e:
         click.echo(f"❌ File not found: {str(e)}")
+    except Exception as e:
+        click.echo(f"❌ Error: {str(e)}")

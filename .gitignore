@@ -37,3 +37,8 @@ coverage.xml
 
 # Logs
 *.log 
+
+
+# Credentials
+credentials.json
+token.pickle

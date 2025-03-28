@@ -173,3 +173,80 @@ class GoogleCalendarClient:
             formatted = dt.strftime('%Y-%m-%dT%H:%M:%S')
             
         return formatted + 'Z'
+
+    def schedule_meeting(self, attendee_emails: List[str], start_time: datetime, end_time: datetime, 
+                      title: str, calendar_id: str = 'primary') -> Event:
+        """Schedule a new meeting in the calendar.
+        
+        Args:
+            attendee_emails: List of attendee email addresses
+            start_time: Start time (timezone-aware)
+            end_time: End time (timezone-aware)
+            title: Meeting title
+            calendar_id: ID of the calendar to create event in (default: 'primary')
+            
+        Returns:
+            Event object representing the created meeting
+            
+        Raises:
+            HttpError: If the API request fails
+        """
+        if not self.service:
+            self.authenticate()
+
+        # Create event body
+        event_body = {
+            'summary': title,
+            'start': {
+                'dateTime': self._sanitize_date_for_api(start_time),
+            },
+            'end': {
+                'dateTime': self._sanitize_date_for_api(end_time),
+            },
+            'attendees': [{'email': email} for email in attendee_emails]
+        }
+
+        try:
+            # Create the event
+            created_event = self.service.events().insert(
+                calendarId=calendar_id,
+                body=event_body,
+                sendUpdates='all'  # Send email notifications to attendees
+            ).execute()
+
+            # Convert to our Event model
+            attendees = [
+                Attendee(
+                    name=attendee.get('displayName', ''),
+                    email=attendee['email'],
+                    response_status=attendee.get('responseStatus', 'needsAction')
+                )
+                for attendee in created_event.get('attendees', [])
+            ]
+
+            # Create organizer
+            organizer = None
+            if 'organizer' in created_event:
+                organizer = Attendee(
+                    name=created_event['organizer'].get('displayName', ''),
+                    email=created_event['organizer']['email']
+                )
+
+            # Convert times
+            start = created_event['start'].get('dateTime', created_event['start'].get('date'))
+            end = created_event['end'].get('dateTime', created_event['end'].get('date'))
+            start_time = datetime.fromisoformat(start.replace('Z', '+00:00'))
+            end_time = datetime.fromisoformat(end.replace('Z', '+00:00'))
+
+            return Event(
+                id=created_event['id'],
+                title=created_event['summary'],
+                start_time=start_time,
+                end_time=end_time,
+                attendees=attendees,
+                organizer=organizer
+            )
+
+        except HttpError as error:
+            print(f'An error occurred: {error}')
+            raise

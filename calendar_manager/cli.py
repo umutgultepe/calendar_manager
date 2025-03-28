@@ -3,13 +3,13 @@
 import os
 import yaml
 import click
-from datetime import datetime
+from datetime import datetime, timedelta
 from .calendar_client import GoogleCalendarClient
 from .person_manager import PersonManager
 from .one_on_one_manager import OneOnOneManager
 from .models import Attendee
 import zoneinfo
-from typing import Optional
+from typing import Optional, Tuple
 
 def _load_config():
     """Load configuration from meeting_frequency.yaml."""
@@ -290,6 +290,31 @@ def refresh_dataset(days: int, org_file: str, credentials: str):
     except Exception as e:
         click.echo(f"❌ Error: {str(e)}")
 
+def _get_default_date_range() -> Tuple[datetime, datetime]:
+    """Get default date range for meetings (next business week).
+    
+    Returns:
+        Tuple of (start_date, end_date) where:
+        - start_date defaults to next Monday
+        - end_date defaults to next Friday
+    """
+    now = datetime.now()
+    # Default to next Monday
+    start_date = now + timedelta(days=(7 - now.weekday()))
+    # Default to end of next business week (Friday)
+    end_date = start_date + timedelta(days=4)
+    
+    # Ensure dates are timezone-aware
+    if start_date.tzinfo is None:
+        start_date = start_date.replace(tzinfo=now.astimezone().tzinfo)
+    if end_date.tzinfo is None:
+        end_date = end_date.replace(tzinfo=now.astimezone().tzinfo)
+        
+    # Set end_date to end of day
+    end_date = end_date.replace(hour=23, minute=59, second=59)
+    
+    return start_date, end_date
+
 @main.command()
 @click.option('--start-date', '-s', type=str,
               help='Start date in YYYY-MM-DD format (defaults to next Monday)')
@@ -326,7 +351,7 @@ def free_slots(start_date: Optional[str], end_date: Optional[str], org_file: str
             calendar_client=calendar_client
         )
 
-        # Parse dates if provided
+        # Parse dates if provided, otherwise use defaults
         start = None
         end = None
         if start_date:
@@ -342,6 +367,13 @@ def free_slots(start_date: Optional[str], end_date: Optional[str], org_file: str
             except ValueError:
                 click.echo("❌ Invalid end date format. Please use YYYY-MM-DD")
                 return
+
+        if not start or not end:
+            default_start, default_end = _get_default_date_range()
+            if not start:
+                start = default_start
+            if not end:
+                end = default_end
 
         # Get free slots
         slots = one_on_one_manager.get_free_slots(start_date=start, end_date=end)
@@ -475,13 +507,16 @@ def is_free(username: str, date: str, time: str, org_file: str, credentials: str
               help='End date in YYYY-MM-DD format (defaults to next Friday)')
 @click.option('--no-refresh', is_flag=True,
               help='Skip refreshing the dataset before recommending meetings')
+@click.option('--dry-run', is_flag=True,
+              help='Only simulate scheduling without actually creating calendar events')
 @click.option('--org-file', '-o',
               default='calendar_manager/config/organization.csv',
               help='Path to the organization CSV file')
 @click.option('--credentials', '-c',
               default='credentials.json',
               help='Path to the credentials.json file')
-def recommend(start_date: Optional[str], end_date: Optional[str], no_refresh: bool, org_file: str, credentials: str):
+def recommend(start_date: Optional[str], end_date: Optional[str], no_refresh: bool, 
+             dry_run: bool, org_file: str, credentials: str):
     """Recommend and confirm 1:1 meetings based on availability."""
     try:
         # Initialize dependencies
@@ -514,7 +549,7 @@ def recommend(start_date: Optional[str], end_date: Optional[str], no_refresh: bo
                 if not click.confirm("Continue with existing dataset?", default=True):
                     return
 
-        # Parse dates if provided
+        # Parse dates if provided, otherwise use defaults
         start = None
         end = None
         if start_date:
@@ -530,6 +565,13 @@ def recommend(start_date: Optional[str], end_date: Optional[str], no_refresh: bo
             except ValueError:
                 click.echo("❌ Invalid end date format. Please use YYYY-MM-DD")
                 return
+
+        if not start or not end:
+            default_start, default_end = _get_default_date_range()
+            if not start:
+                start = default_start
+            if not end:
+                end = default_end
 
         # Get free slots
         click.echo("\n🔍 Finding available time slots...")
@@ -566,6 +608,10 @@ def recommend(start_date: Optional[str], end_date: Optional[str], no_refresh: bo
                 if not person:
                     continue
 
+                if next_date.date() > end.date():
+                    print(f"Skipping {person.name} because due date is after end date")
+                    continue
+
                 # Check if person is free
                 try:
                     if one_on_one_manager.is_person_free(slot, email):
@@ -584,7 +630,18 @@ def recommend(start_date: Optional[str], end_date: Optional[str], no_refresh: bo
                         
                         # Get user confirmation
                         if click.confirm("Would you like to schedule this meeting?", default=True):
-                            click.echo("✅ Confirmed! (Scheduling will be implemented later)")
+                            if dry_run:
+                                click.echo("✅ Confirmed! (Dry run - no meeting scheduled)")
+                            else:
+                                try:
+                                    # Schedule the meeting
+                                    end_time = slot + timedelta(minutes=30)
+                                    event = one_on_one_manager.schedule(email, slot, end_time)
+                                    click.echo(f"✅ Meeting scheduled! Event ID: {event.id}")
+                                except Exception as e:
+                                    click.echo(f"❌ Failed to schedule meeting: {str(e)}")
+                                    if not click.confirm("Continue with next suggestion?", default=True):
+                                        return
                             # Remove this person from the list
                             next_meetings.remove((email, next_date))
                             # Move to next slot

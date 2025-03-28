@@ -247,33 +247,21 @@ class OneOnOneManager:
         Single-attendee events (like focus time or personal blocks) are not counted as conflicts.
         
         Args:
-            start_date: Start date for the search range (optional, defaults to next Monday)
-            end_date: End date for the search range (optional, defaults to next Friday)
+            start_date: Start date for the search range
+            end_date: End date for the search range
             
         Returns:
             List of datetime objects representing available meeting start times
+            
+        Raises:
+            ValueError: If start_date or end_date is not provided
         """
+        if not start_date or not end_date:
+            raise ValueError("Both start_date and end_date must be provided")
+            
         # Get slot configuration
         slot_calendar = self.config['organizer']['slot_calendar_name']
         slot_title = self.config['organizer']['slot_title']
-        
-        # Calculate date range
-        now = datetime.now()
-        if start_date is None:
-            # Default to next Monday
-            start_date = now + timedelta(days=(7 - now.weekday()))
-        if end_date is None:
-            # Default to end of next business week (Friday)
-            end_date = start_date + timedelta(days=4)
-            
-        # Ensure dates are timezone-aware
-        if start_date.tzinfo is None:
-            start_date = start_date.replace(tzinfo=now.astimezone().tzinfo)
-        if end_date.tzinfo is None:
-            end_date = end_date.replace(tzinfo=now.astimezone().tzinfo)
-            
-        # Set end_date to end of day
-        end_date = end_date.replace(hour=23, minute=59, second=59)
         
         print(f"\nSearching for '{slot_title}' blocks between:")
         print(f"  Start: {start_date.strftime('%A, %B %d, %Y')}")
@@ -317,13 +305,20 @@ class OneOnOneManager:
                     end_time=slot_end
                 )
                 
-                # Filter out single-attendee events
+                # Filter out:
+                # - single-attendee events
+                # - events where the organizer has declined
                 conflicts = [
                     event for event in events
                     if len(event.attendees) > 1  # More than one attendee
+                    and not any(  # Check if organizer has declined
+                        attendee.email == self.organizer.email 
+                        and attendee.has_declined 
+                        for attendee in event.attendees
+                    )
                 ]
                 
-                # If no multi-attendee conflicts, add to free slots
+                # If no conflicts, add to free slots
                 if not conflicts:
                     free_slots.append(current_time)
                     if events:
@@ -423,3 +418,33 @@ class OneOnOneManager:
         
         # Sort by date
         return sorted(meetings, key=lambda x: x[1]) 
+
+    def schedule(self, email: str, start_time: datetime, end_time: datetime) -> Event:
+        """Schedule a 1:1 meeting with a person.
+        
+        Args:
+            email: Email address of the person
+            start_time: Start time (timezone-aware)
+            end_time: End time (timezone-aware)
+            
+        Returns:
+            Event object representing the scheduled meeting
+            
+        Raises:
+            ValueError: If person not found
+        """
+        # Get the person
+        person = self.person_manager.by_email(email)
+        if not person:
+            raise ValueError(f"Person not found with email: {email}")
+            
+        # Create title in standard format: "Person / Organizer"
+        title = f"{person.first_name} / {self.organizer.first_name}"
+        
+        # Schedule the meeting with both person and organizer as attendees
+        return self.calendar_client.schedule_meeting(
+            attendee_emails=[email, self.organizer.email],  # Both person and organizer
+            start_time=start_time,
+            end_time=end_time,
+            title=title
+        ) 

@@ -99,6 +99,12 @@ class OneOnOneManager:
     def _is_one_on_one_with_person(self, event: Event, person: Person) -> bool:
         """Check if an event is a 1:1 meeting with the specified person.
         
+        An event is considered a 1:1 if all of the following are true:
+        - The person's first name is in the title
+        - The organizer's first name is in the title
+        - The title contains "/"
+        - The person's email is in the attendee list
+        
         Args:
             event: Event to check
             person: Person to check against
@@ -106,14 +112,16 @@ class OneOnOneManager:
         Returns:
             bool: True if the event is a 1:1 with the person
         """
-        # Get the other person's name (either organizer or attendee)
-        # Check both possible formats of 1:1 title
-        possible_titles = [
-            f"{person.first_name} / {self.organizer.first_name}",
-            f"{self.organizer.first_name} / {person.first_name}"
-        ]
-
-        return event.title in possible_titles
+        # Check if all required elements are in the title and person is an attendee
+        title = event.title
+        attendee_emails = [attendee.email for attendee in event.attendees]
+        
+        return all([
+            person.first_name in title,
+            self.organizer.first_name in title,
+            "/" in title,
+            person.email in attendee_emails
+        ])
 
     def get_last_by_username(self, username: str, days_back: int = 30) -> Optional[Event]:
         """Get the last 1:1 meeting with a person by their username.
@@ -123,7 +131,8 @@ class OneOnOneManager:
             days_back: Number of days to look back (default: 30)
             
         Returns:
-            Event object if found, None otherwise
+            Event object if found, None otherwise.
+            Skips events where all attendees have declined.
         """
         email = f"{username}@{self.domain}"
         person = self.person_manager.by_email(email)
@@ -142,10 +151,17 @@ class OneOnOneManager:
         )
 
         # Filter for actual 1:1s and sort by start time (most recent first)
-        one_on_ones = [
-            event for event in events 
-            if self._is_one_on_one_with_person(event, person)
-        ]
+        one_on_ones = []
+        for event in events:
+            if not self._is_one_on_one_with_person(event, person):
+                continue
+                
+            # Skip if all attendees have declined
+            if all(attendee.has_declined for attendee in event.attendees):
+                continue
+                
+            one_on_ones.append(event)
+            
         one_on_ones.sort(key=lambda x: x.start_time, reverse=True)
 
         return one_on_ones[0] if one_on_ones else None

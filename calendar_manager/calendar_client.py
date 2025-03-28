@@ -110,7 +110,8 @@ class GoogleCalendarClient:
                 for attendee in item.get('attendees', []):
                     attendees.append(Attendee(
                         name=attendee.get('displayName', ''),
-                        email=attendee['email']
+                        email=attendee['email'],
+                        response_status=attendee.get('responseStatus', 'needsAction')
                     ))
 
                 # Extract start and end times

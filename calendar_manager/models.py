@@ -11,6 +11,7 @@ class Attendee:
     """Represents an attendee of an event."""
     name: str
     email: str
+    response_status: str = "needsAction"  # Can be: "needsAction", "declined", "tentative", or "accepted"
 
     @property
     def first_name(self) -> str:
@@ -20,6 +21,15 @@ class Attendee:
             First name extracted from the full name
         """
         return self.name.split()[0]
+
+    @property
+    def has_declined(self) -> bool:
+        """Check if the attendee has declined the event.
+        
+        Returns:
+            bool: True if the attendee has declined
+        """
+        return self.response_status == "declined"
 
 @dataclass
 class Person:
